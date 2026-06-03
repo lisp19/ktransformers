@@ -30,4 +30,4 @@ build*
 CMakeFiles/
 kvc2/
 sched/
-*.png
+*.pngkt_a2_env/
