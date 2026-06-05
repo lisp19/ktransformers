@@ -6,6 +6,7 @@ After=default.target
 Type=simple
 WorkingDirectory=/home/lsp/a2_kt/ktransformers
 Environment=CUDA_VISIBLE_DEVICES=GPU-8625457e-0c7b-dd40-5d76-1f5845d811ae
+Environment=PYTHONPATH=/home/lsp/a2_kt/ktransformers/third_party/sglang/python
 ExecStart=/usr/bin/bash -lc 'exec /home/lsp/a2_kt/ktransformers/kt_a2_env/bin/python -m sglang.launch_server --host 0.0.0.0 --port 30001 --model /home/lsp/data/models/gptq/qwen3.6-35b-a3b --kt-weight-path /home/lsp/data/models/gptq/qwen3.6-35b-a3b --kt-cpuinfer 16 --kt-threadpool-count 1 --kt-num-gpu-experts 48 --kt-method GPTQ_INT4 --kt-gpu-prefill-token-threshold 16384 --kt-enable-dynamic-expert-update --attention-backend flashinfer --trust-remote-code --mem-fraction-static 0.92 --chunked-prefill-size 8192 --max-total-tokens 262144 --reasoning-parser qwen3-thinking --tool-call-parser qwen --max-running-requests 16 --watchdog-timeout 600 --enable-mixed-chunk --tensor-parallel-size 1 --enable-p2p-check --weight-loader-disable-mmap --kv-cache-dtype fp8_e4m3 --kt-expert-placement-strategy frequency --disable-shared-experts-fusion --served-model-name qwen3.6-35b-a3b'
 Restart=always
 RestartSec=5
