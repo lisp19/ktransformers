@@ -91,3 +91,98 @@ Optimized file:
   - Strong decode gain, but long-context prefill regressed relative to the best code-only path.
 - Additional CPU submit fast paths tested in KT wrapper / `experts_base.py`
   - Did not beat the final seeded-frequency configuration and were reverted from the selected runtime path.
+
+## 2026-06-07 CPU Kernel Optimization Round
+
+### Effective Code Changes
+
+Superproject:
+
+- `332baf6` `[perf]: tile avx2 gptq int4 moe kernel and add phase instrumentation`
+
+Submodule:
+
+- `ef0f44982` `[bench]: support gptq int4 and qwen3.6 config in kt benchmark`
+
+### What Changed
+
+1. Added a small-`m` tiled path to `kt-kernel/operators/avx2/gptq_int4-moe.hpp` so one INT4 dequantized weight block is reused across multiple token rows instead of being repeated row-by-row.
+2. Extended the KT micro-benchmark harness to support:
+   - `GPTQ_INT4`
+   - Qwen3.6 / Qwen3.5 style `text_config`
+3. Added phase timing and worker-pool balance diagnostics to localize CPU-side hot spots and validate that the gain came from the GPTQ INT4 CPU kernel itself.
+
+### Micro-Benchmark Evidence
+
+Structured workload:
+
+- `964 tokens`, `top_k=8`
+- per token: `4 GPU expert slots + 4 CPU expert slots`
+- GPU experts active: `32`
+- CPU experts active: `64`
+
+Baseline env (`/data/nvme0/kt_a2_qw36_seeded_base`):
+
+- `sync_cpu_mean_ms ≈ 650.83`
+- `total_mean_ms ≈ 655.36`
+
+Optimized env (`/data/nvme0/kt_a2_qw36_seeded_exp_cpu1`):
+
+- `sync_cpu_mean_ms ≈ 430.72`
+- `total_mean_ms ≈ 435.25`
+
+Approximate delta:
+
+- `sync_cpu`: about `-33.8%`
+- `total`: about `-33.6%`
+
+Phase timing showed the speedup came from CPU kernel compute:
+
+- before:
+  - `gate_up_gemm ~225–237 ms`
+  - `down_gemm ~109–162 ms`
+- after:
+  - `gate_up_gemm ~108–113 ms`
+  - `down_gemm ~51–102 ms`
+
+### End-to-End Service Benchmark Evidence
+
+Experiment endpoint:
+
+- transient unit: `sglang-qw36-exp.service`
+- env: `/data/nvme0/kt_a2_qw36_seeded_exp_cpu1`
+- same serving args and same `init-expert-location` as baseline lane
+
+Result files:
+
+- `reports/exp_cpu_tile_short_prompt500_2r.json`
+- `reports/exp_cpu_tile_prompt1000_2r.json`
+- `reports/exp_cpu_tile_prompt3000_2r.json`
+
+Compared against:
+
+- `reports/current_service_baseline_3r.json`
+
+Delta vs baseline:
+
+- `short_lt50`
+  - prefill: `+93.44%`
+  - decode: `+22.71%`
+  - total time: `-19.97%`
+- `prompt_500`
+  - prefill: `+183.97%`
+  - decode: `+27.22%`
+  - total time: `-39.33%`
+- `prompt_1000`
+  - prefill: `+194.43%`
+  - decode: `+39.10%`
+  - total time: `-50.28%`
+- `prompt_3000`
+  - prefill: `+194.11%`
+  - decode: `+38.62%`
+  - total time: `-58.75%`
+
+### Notes
+
+- This round achieved strong gains on both prefill and decode in all short / medium / long benchmark categories.
+- The transient experiment lane could take much longer to reach `ready` on first launch because of extra JIT / CUDA graph setup, but once ready the end-to-end throughput improved substantially.
