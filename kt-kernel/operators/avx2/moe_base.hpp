@@ -35,6 +35,16 @@
 #include "avx2_bf16_utils.hpp"
 #include "llama.cpp/ggml.h"
 
+namespace kt_avx2_detail {
+inline bool timing_enabled() {
+  static bool enabled = []() {
+    const char* env = std::getenv("KT_MOE_PHASE_TIMING");
+    return env != nullptr && env[0] == '1';
+  }();
+  return enabled;
+}
+}  // namespace kt_avx2_detail
+
 template <class T, class Derived>
 class AVX2_MOE_BASE {
  public:
@@ -193,6 +203,22 @@ class AVX2_MOE_BASE {
   void forward_prefill(int qlen, int k, const int64_t* expert_ids, const float* weights, const void* input,
                        void* output) {
     auto pool = config_.pool->get_subpool(tp_part_idx);
+    const bool timing_enabled = kt_avx2_detail::timing_enabled();
+    const auto t_start = timing_enabled ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+    auto t_prev = t_start;
+    auto phase_ms = [&](const char* name) {
+      if (!timing_enabled) return;
+      const auto now = std::chrono::steady_clock::now();
+      const double ms = std::chrono::duration<double, std::milli>(now - t_prev).count();
+      std::fprintf(stderr,
+                   "[kt-moe-phase] layer=%d part=%d qlen=%d phase=%s ms=%.3f\n",
+                   config_.layer_idx,
+                   tp_part_idx,
+                   qlen,
+                   name,
+                   ms);
+      t_prev = now;
+    };
 
     int activated_expert = 0;
     std::fill(m_local_num_.begin(), m_local_num_.end(), 0);
@@ -211,6 +237,7 @@ class AVX2_MOE_BASE {
         activated_expert++;
       }
     }
+    phase_ms("count_active");
 
     // Assign pool memory to buffers
     size_t offset = 0;
@@ -252,29 +279,32 @@ class AVX2_MOE_BASE {
       down_bc_[i]->set_data(down_bc_pool_ptr);
       down_bc_pool_ptr = (void*)((uintptr_t)down_bc_pool_ptr + align64(buffer_c_required_size(max_m, config_.hidden_size)));
     }
+    phase_ms("assign_buffers");
 
-    auto direct_or_pool = [&](int count, auto&& fn) {
+    auto direct_or_pool = [&](int count, const char* label, auto&& fn) {
       if (qlen < 10) {
         for (int i = 0; i < count; i++) fn(i);
       } else {
-        pool->do_work_stealing_job(count, nullptr, fn, nullptr);
+        pool->do_work_stealing_job(count, nullptr, fn, nullptr, label);
       }
     };
 
     // Copy input to per-expert buffers
-    direct_or_pool(qlen, [&](int i) {
+    direct_or_pool(qlen, "prefill_scatter_input", [&](int i) {
       for (int j = 0; j < k; j++) {
         if (config_.should_skip_expert(expert_ids[i * k + j])) continue;
         memcpy(m_local_input_ptr_[expert_ids[i * k + j]] + m_local_pos_[i][j] * config_.hidden_size,
                (ggml_bf16_t*)input + i * config_.hidden_size, sizeof(ggml_bf16_t) * config_.hidden_size);
       }
     });
+    phase_ms("scatter_input");
 
     // Pack input into BufferA (trivial memcpy for AVX2)
-    direct_or_pool(activated_expert, [this](int task_id) {
+    direct_or_pool(activated_expert, "prefill_pack_gate_up", [this](int task_id) {
       int expert_idx = m_expert_id_map_[task_id];
       gate_up_ba_[expert_idx]->from_mat(m_local_num_[expert_idx], m_local_input_ptr_[expert_idx], 0, 1);
     });
+    phase_ms("pack_gate_up");
 
     // Gate + Up GEMM
     int nth = T::recommended_nth(config_.intermediate_size);
@@ -292,10 +322,13 @@ class AVX2_MOE_BASE {
             gate_bc_[expert_idx]->to_mat(m_local_num_[expert_idx], m_local_gate_output_ptr_[expert_idx], ith, nth);
           }
         },
-        nullptr);
+        nullptr,
+        "prefill_gate_up_gemm");
+    phase_ms("gate_up_gemm");
 
     // Activation: SiLU(gate) * up — AVX2 version (8 elements at a time)
     apply_activation(activated_expert, nth, qlen);
+    phase_ms("activation");
 
     // Pack activation output into BufferA for down projection
     pool->do_work_stealing_job(
@@ -304,7 +337,9 @@ class AVX2_MOE_BASE {
           int expert_idx = m_expert_id_map_[task_id];
           down_ba_[expert_idx]->from_mat(m_local_num_[expert_idx], m_local_gate_output_ptr_[expert_idx], 0, 1);
         },
-        nullptr);
+        nullptr,
+        "prefill_pack_down");
+    phase_ms("pack_down");
 
     // Down GEMM
     nth = T::recommended_nth(config_.hidden_size);
@@ -316,7 +351,9 @@ class AVX2_MOE_BASE {
           derived()->do_down_gemm(expert_idx, ith, nth, qlen);
           down_bc_[expert_idx]->to_mat(m_local_num_[expert_idx], m_local_down_output_ptr_[expert_idx], ith, nth);
         },
-        nullptr);
+        nullptr,
+        "prefill_down_gemm");
+    phase_ms("down_gemm");
 
     // Weighted sum of expert outputs — AVX2 version (16 BF16 = 2x8 FP32 at a time)
     pool->do_work_stealing_job(
@@ -341,7 +378,20 @@ class AVX2_MOE_BASE {
             f32out[1] = x1;
           }
         },
-        nullptr);
+        nullptr,
+        "prefill_weighted_sum");
+    phase_ms("weighted_sum");
+    if (timing_enabled) {
+      const auto t_end = std::chrono::steady_clock::now();
+      const double total_ms = std::chrono::duration<double, std::milli>(t_end - t_start).count();
+      std::fprintf(stderr,
+                   "[kt-moe-phase] layer=%d part=%d qlen=%d phase=forward_prefill_total ms=%.3f active_experts=%d\n",
+                   config_.layer_idx,
+                   tp_part_idx,
+                   qlen,
+                   total_ms,
+                   activated_expert);
+    }
   }
 
   void forward_decode(int k, const int64_t* expert_ids, const float* weights, const void* input, void* output) {
@@ -522,7 +572,7 @@ class AVX2_MOE_BASE {
     if (qlen < 10) {
       for (int task_id = 0; task_id < nth * activated_expert; task_id++) fn(task_id);
     } else {
-      pool->do_work_stealing_job(nth * activated_expert, nullptr, fn, nullptr);
+      pool->do_work_stealing_job(nth * activated_expert, nullptr, fn, nullptr, "prefill_activation");
     }
   }
 };
@@ -551,6 +601,8 @@ class TP_MOE<AVX2_MOE_BASE<T, Derived>> : public TP_MOE_Common<AVX2_MOE_BASE<T, 
     auto& tp_count = this->tp_count;
     auto& local_output_numa = this->local_output_numa;
     auto& tp_configs = this->tp_configs;
+    const bool timing_enabled = kt_avx2_detail::timing_enabled();
+    const auto t_start = timing_enabled ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 
     auto merge_fn = [this, output, incremental, &config, &tp_count, &local_output_numa, &tp_configs](int token_nth) {
       float* merge_to = local_output_numa[0] + token_nth * tp_configs[0].hidden_size;
@@ -582,7 +634,18 @@ class TP_MOE<AVX2_MOE_BASE<T, Derived>> : public TP_MOE_Common<AVX2_MOE_BASE<T, 
     if (qlen < 10) {
       for (int i = 0; i < qlen; i++) merge_fn(i);
     } else {
-      pool->do_work_stealing_job(qlen, nullptr, merge_fn, nullptr);
+      pool->do_work_stealing_job(qlen, nullptr, merge_fn, nullptr, "merge_results");
+    }
+    if (timing_enabled) {
+      const auto t_end = std::chrono::steady_clock::now();
+      const double ms = std::chrono::duration<double, std::milli>(t_end - t_start).count();
+      std::fprintf(stderr,
+                   "[kt-moe-phase] layer=%d qlen=%d phase=merge_results ms=%.3f incremental=%d tp_count=%d\n",
+                   config.layer_idx,
+                   qlen,
+                   ms,
+                   incremental ? 1 : 0,
+                   tp_count);
     }
   }
 

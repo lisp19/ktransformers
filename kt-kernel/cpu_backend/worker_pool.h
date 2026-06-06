@@ -21,6 +21,7 @@
 #include <memory>
 #include <mutex>
 #include <thread>
+#include <cstdint>
 #include <vector>
 
 // #define PROFILE_BALANCE
@@ -64,9 +65,7 @@ struct alignas(64) ThreadState {
   std::atomic<ThreadStatus> status;
   std::mutex mutex;
   std::condition_variable cv;
-#ifdef PROFILE_BALANCE
-  size_t finish_ns;
-#endif
+  size_t finish_ns = 0;
 };
 
 class InNumaPool {
@@ -78,9 +77,13 @@ class InNumaPool {
   void set_restricted_worker_count(int count);
 
   void do_work_stealing_job_async(int, std::function<void(int)>, std::function<void(int)>, std::function<void(int)>);
+  void do_work_stealing_job_async(int, std::function<void(int)>, std::function<void(int)>, std::function<void(int)>,
+                                  const char*);
   void wait();
 
   void do_work_stealing_job(int, std::function<void(int)>, std::function<void(int)>, std::function<void(int)>);
+  void do_work_stealing_job(int, std::function<void(int)>, std::function<void(int)>, std::function<void(int)>,
+                            const char*);
   void do_work_stealing_job(int, std::function<void(int)>);
 
  private:
@@ -97,6 +100,8 @@ class InNumaPool {
   std::function<void(int)> finalize_func_;
   std::atomic<int> curr_;
   int end_;
+  uint64_t current_job_id = 0;
+  const char* current_job_label = nullptr;
 
   void process_tasks(int);
   void worker_thread(int, int);
@@ -151,6 +156,8 @@ class WorkerPool {
   InNumaPool* get_subpool(int numa_id);
 
   void do_work_stealing_job(int, std::function<void(int)>, std::function<void(int)>, std::function<void(int)>);
+  void do_work_stealing_job(int, std::function<void(int)>, std::function<void(int)>, std::function<void(int)>,
+                            const char*);
   void do_work_stealing_job(int, std::function<void(int)>);
 
   WorkerPoolConfig config;

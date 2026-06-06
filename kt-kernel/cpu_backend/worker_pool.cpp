@@ -24,6 +24,21 @@
 
 thread_local int WorkerPool::thread_local_id = -1;
 
+namespace {
+bool pool_balance_timing_enabled() {
+  static bool enabled = []() {
+    const char* env = std::getenv("KT_POOL_BALANCE_TIMING");
+    return env != nullptr && env[0] == '1';
+  }();
+  return enabled;
+}
+
+uint64_t next_pool_job_id() {
+  static std::atomic<uint64_t> next_id{1};
+  return next_id.fetch_add(1, std::memory_order_relaxed);
+}
+}  // namespace
+
 InNumaPool::InNumaPool(int max_thread_num) {
   printf("In Numa Worker Pool at NUMA %d, %d threads\n", numa_node_of_cpu(sched_getcpu()), max_thread_num);
   total_worker_count = max_thread_num;
@@ -121,40 +136,68 @@ void InNumaPool::wait() {
     }
   }
 
-#ifdef PROFILE_BALANCE
-  size_t max_time = 0;
-  size_t min_time = thread_state_[0].finish_ns;
-  size_t sum = 0;
-  for (int i = 0; i < worker_count; i++) {
-    sum += thread_state_[i].finish_ns;
-    max_time = std::max(max_time, thread_state_[i].finish_ns);
-    min_time = std::min(min_time, thread_state_[i].finish_ns);
+  if (pool_balance_timing_enabled()) {
+    size_t max_time = 0;
+    size_t min_time = thread_state_[0].finish_ns;
+    size_t sum = 0;
+    for (int i = 0; i < worker_count; i++) {
+      sum += thread_state_[i].finish_ns;
+      max_time = std::max(max_time, thread_state_[i].finish_ns);
+      min_time = std::min(min_time, thread_state_[i].finish_ns);
+    }
+    double balance = max_time == 0 ? 1.0 : (1.0 * sum / (max_time * worker_count));
+    std::fprintf(stderr,
+                 "[kt-pool-balance] job=%llu label=%s tasks=%d workers=%d max_ms=%.3f min_ms=%.3f avg_ms=%.3f balance=%.4f\n",
+                 static_cast<unsigned long long>(current_job_id),
+                 current_job_label ? current_job_label : "-",
+                 end_,
+                 worker_count,
+                 max_time / 1e6,
+                 min_time / 1e6,
+                 (sum * 1.0 / worker_count) / 1e6,
+                 balance);
+    std::fflush(stderr);
   }
-  double balance = 1.0 * sum / (max_time * worker_count);
-  printf("max_time: %ld, min_time: %ld, sum_time: %ld, balance: %f\n", max_time, min_time, sum, balance);
-
-#endif
 }
 
 void InNumaPool::do_work_stealing_job(int task_num, std::function<void(int)> compute_func) {
-  do_work_stealing_job(task_num, nullptr, compute_func, nullptr);
+  do_work_stealing_job(task_num, nullptr, compute_func, nullptr, nullptr);
 }
 
 void InNumaPool::do_work_stealing_job(int task_num, std::function<void(int)> init_func,
                                       std::function<void(int)> compute_func, std::function<void(int)> finalize_func) {
-  do_work_stealing_job_async(task_num, init_func, compute_func, finalize_func);
+  do_work_stealing_job_async(task_num, init_func, compute_func, finalize_func, nullptr);
+  wait();
+}
+
+void InNumaPool::do_work_stealing_job(int task_num, std::function<void(int)> init_func,
+                                      std::function<void(int)> compute_func, std::function<void(int)> finalize_func,
+                                      const char* label) {
+  do_work_stealing_job_async(task_num, init_func, compute_func, finalize_func, label);
   wait();
 }
 
 void InNumaPool::do_work_stealing_job_async(int task_num, std::function<void(int)> init_func,
                                             std::function<void(int)> compute_func,
                                             std::function<void(int)> finalize_func) {
+  do_work_stealing_job_async(task_num, init_func, compute_func, finalize_func, nullptr);
+}
+
+void InNumaPool::do_work_stealing_job_async(int task_num, std::function<void(int)> init_func,
+                                            std::function<void(int)> compute_func,
+                                            std::function<void(int)> finalize_func,
+                                            const char* label) {
   init_func_ = init_func;
   compute_func_ = compute_func;
   finalize_func_ = finalize_func;
   worker_count = std::min(restricted_worker_count, task_num);
+  current_job_id = next_pool_job_id();
+  current_job_label = label;
   curr_.store(0, std::memory_order_release);
   end_ = task_num;
+  for (int i = 0; i < worker_count; i++) {
+    thread_state_[i].finish_ns = 0;
+  }
   for (int i = 0; i < worker_count; i++) {
     {
       std::lock_guard<std::mutex> lock(thread_state_[i].mutex);
@@ -167,9 +210,8 @@ void InNumaPool::do_work_stealing_job_async(int task_num, std::function<void(int
 }
 
 void InNumaPool::process_tasks(int thread_id) {
-#ifdef PROFILE_BALANCE
-  auto start = std::chrono::high_resolution_clock::now();
-#endif
+  const bool timing_enabled = pool_balance_timing_enabled();
+  const auto start = timing_enabled ? std::chrono::high_resolution_clock::now() : std::chrono::high_resolution_clock::time_point{};
   auto& s = thread_state_[thread_id];
   if (init_func_ != nullptr) {
     init_func_(thread_id);
@@ -203,10 +245,10 @@ void InNumaPool::process_tasks(int thread_id) {
   }
 
   s.status.store(ThreadStatus::WAITING, std::memory_order_release);
-#ifdef PROFILE_BALANCE
-  s.finish_ns =
-      std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::high_resolution_clock::now() - start).count();
-#endif
+  if (timing_enabled) {
+    s.finish_ns =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::high_resolution_clock::now() - start).count();
+  }
 }
 
 void InNumaPool::worker_thread(int thread_id, int numa_id) {
@@ -482,6 +524,12 @@ NumaJobDistributor* WorkerPool::dispense_backend() { return distributor.get(); }
 void WorkerPool::do_work_stealing_job(int task_num, std::function<void(int)> init_func,
                                       std::function<void(int)> compute_func, std::function<void(int)> finalize_func) {
   numa_worker_pools[0]->do_work_stealing_job(task_num, init_func, compute_func, finalize_func);
+}
+
+void WorkerPool::do_work_stealing_job(int task_num, std::function<void(int)> init_func,
+                                      std::function<void(int)> compute_func, std::function<void(int)> finalize_func,
+                                      const char* label) {
+  numa_worker_pools[0]->do_work_stealing_job(task_num, init_func, compute_func, finalize_func, label);
 }
 
 void WorkerPool::do_work_stealing_job(int task_num, std::function<void(int)> compute_func) {

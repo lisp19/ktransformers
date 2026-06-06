@@ -164,32 +164,57 @@ static inline void gemm_gptq_sym_int4(
   auto [n_start, n_end] = split_range(n, ith, nth);
   const int group_size = b.group_size;
   const int num_groups = b.num_groups;
+  constexpr int M_TILE = 4;
 
   for (int ni = n_start; ni < n_end; ni++) {
-    for (int mi = 0; mi < m; mi++) {
-      const ggml_bf16_t* a_row = a.data + (size_t)mi * a.k;
-      float sum = 0.0f;
+    int mi = 0;
+    for (; mi + M_TILE <= m; mi += M_TILE) {
+      __m256 acc[M_TILE] = {
+          _mm256_setzero_ps(),
+          _mm256_setzero_ps(),
+          _mm256_setzero_ps(),
+          _mm256_setzero_ps(),
+      };
 
       for (int g = 0; g < num_groups; g++) {
         float scale = b.scales[g * n + ni];
         int k_base = g * group_size;
 
-        __m256 acc1 = _mm256_setzero_ps();
-        __m256 acc2 = _mm256_setzero_ps();
+        for (int ki = 0; ki < group_size; ki += 8) {
+          int k_abs = k_base + ki;
+          uint32_t packed = b.qweight[(k_abs / 8) * n + ni];
+          __m256 w_val = gptq_sym_dequant_8x4bit(packed, scale);
+          for (int t = 0; t < M_TILE; t++) {
+            const ggml_bf16_t* a_row = a.data + (size_t)(mi + t) * a.k;
+            __m256 a_val = load_bf16_to_fp32(a_row + k_abs);
+            acc[t] = _mm256_fmadd_ps(a_val, w_val, acc[t]);
+          }
+        }
+      }
 
-        // group_size/8 iterations (e.g., 128/8 = 16)
+      for (int t = 0; t < M_TILE; t++) {
+        c.data[(mi + t) * n + ni] = hsum_avx2(acc[t]);
+      }
+    }
+
+    for (; mi < m; mi++) {
+      const ggml_bf16_t* a_row = a.data + (size_t)mi * a.k;
+      __m256 acc = _mm256_setzero_ps();
+
+      for (int g = 0; g < num_groups; g++) {
+        float scale = b.scales[g * n + ni];
+        int k_base = g * group_size;
+
         for (int ki = 0; ki < group_size; ki += 8) {
           int k_abs = k_base + ki;
           __m256 a_val = load_bf16_to_fp32(a_row + k_abs);
           uint32_t packed = b.qweight[(k_abs / 8) * n + ni];
           __m256 w_val = gptq_sym_dequant_8x4bit(packed, scale);
-          acc1 = _mm256_fmadd_ps(a_val, w_val, acc1);
+          acc = _mm256_fmadd_ps(a_val, w_val, acc);
         }
-
-        sum += hsum_avx2(acc1);
       }
 
-      c.data[mi * n + ni] = sum;
+      c.data[mi * n + ni] = hsum_avx2(acc);
     }
   }
 }
