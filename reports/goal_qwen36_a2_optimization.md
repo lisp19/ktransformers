@@ -186,3 +186,48 @@ Delta vs baseline:
 
 - This round achieved strong gains on both prefill and decode in all short / medium / long benchmark categories.
 - The transient experiment lane could take much longer to reach `ready` on first launch because of extra JIT / CUDA graph setup, but once ready the end-to-end throughput improved substantially.
+
+## 2026-06-11 Promotion To Runtime Lane
+
+### New Promoted Runtime Environment
+
+- Source optimized env: `/data/nvme0/kt_a2_qw36_seeded_exp_cpu1`
+- Promoted runtime env: `/data/nvme0/kt_a2_qw36_seeded_perf_base`
+- Creation method:
+  - `conda create --prefix /data/nvme0/kt_a2_qw36_seeded_perf_base --clone /data/nvme0/kt_a2_qw36_seeded_exp_cpu1 -y`
+
+### Local Service Promotion
+
+`sglang-qw36-local.service` is updated to use:
+
+- Python env: `/data/nvme0/kt_a2_qw36_seeded_perf_base`
+- Repo override:
+  - `PYTHONPATH=/home/lsp/a2_kt/ktransformers/third_party/sglang/python`
+- Dedicated TVM FFI cache:
+  - `TVM_FFI_CACHE_DIR=/data/nvme0/tvm-ffi-perf-base`
+
+Repo template updated:
+
+- `ops/sglang-qw36-local.service`
+
+Additional optimized lane template kept in repo:
+
+- `ops/sglang-qw36-opt.service`
+
+### TVM FFI / JIT Finding
+
+The long startup problem was narrowed to the TVM FFI JIT cache:
+
+1. `base` and `exp` environments wrote different absolute include/library paths into `build.ninja`.
+2. Reusing one shared `~/.cache/tvm-ffi` directory caused `ninja` to detect
+   `command line changed for cuda_0.o`, which retriggered `nvcc`.
+3. Giving the promoted runtime lane its own cache directory avoided cross-env
+   cache corruption:
+   - `/data/nvme0/tvm-ffi-perf-base`
+
+Important nuance:
+
+- Moving from `exp_cpu1` to `perf_base` still causes one first-run recompilation,
+  because the absolute env prefix embedded in the command line changes again.
+- After that first compile for the promoted env, the runtime lane should be much
+  closer to a stable restart path than the previous shared-cache setup.
