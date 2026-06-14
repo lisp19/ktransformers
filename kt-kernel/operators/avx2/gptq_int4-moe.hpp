@@ -166,7 +166,77 @@ static inline void gemm_gptq_sym_int4(
   const int num_groups = b.num_groups;
   constexpr int M_TILE = 4;
 
-  for (int ni = n_start; ni < n_end; ni++) {
+  int ni = n_start;
+  if (m > 1) {
+    for (; ni + 2 <= n_end; ni += 2) {
+      int mi = 0;
+      for (; mi + M_TILE <= m; mi += M_TILE) {
+        __m256 acc0[M_TILE] = {
+            _mm256_setzero_ps(),
+            _mm256_setzero_ps(),
+            _mm256_setzero_ps(),
+            _mm256_setzero_ps(),
+        };
+        __m256 acc1[M_TILE] = {
+            _mm256_setzero_ps(),
+            _mm256_setzero_ps(),
+            _mm256_setzero_ps(),
+            _mm256_setzero_ps(),
+        };
+
+        for (int g = 0; g < num_groups; g++) {
+          float scale0 = b.scales[g * n + ni + 0];
+          float scale1 = b.scales[g * n + ni + 1];
+          int k_base = g * group_size;
+
+          for (int ki = 0; ki < group_size; ki += 8) {
+            int k_abs = k_base + ki;
+            uint32_t packed0 = b.qweight[(k_abs / 8) * n + ni + 0];
+            uint32_t packed1 = b.qweight[(k_abs / 8) * n + ni + 1];
+            __m256 w_val0 = gptq_sym_dequant_8x4bit(packed0, scale0);
+            __m256 w_val1 = gptq_sym_dequant_8x4bit(packed1, scale1);
+            for (int t = 0; t < M_TILE; t++) {
+              const ggml_bf16_t* a_row = a.data + (size_t)(mi + t) * a.k;
+              __m256 a_val = load_bf16_to_fp32(a_row + k_abs);
+              acc0[t] = _mm256_fmadd_ps(a_val, w_val0, acc0[t]);
+              acc1[t] = _mm256_fmadd_ps(a_val, w_val1, acc1[t]);
+            }
+          }
+        }
+
+        for (int t = 0; t < M_TILE; t++) {
+          c.data[(mi + t) * n + ni + 0] = hsum_avx2(acc0[t]);
+          c.data[(mi + t) * n + ni + 1] = hsum_avx2(acc1[t]);
+        }
+      }
+
+      for (; mi < m; mi++) {
+        const ggml_bf16_t* a_row = a.data + (size_t)mi * a.k;
+        __m256 acc0 = _mm256_setzero_ps();
+        __m256 acc1 = _mm256_setzero_ps();
+
+        for (int g = 0; g < num_groups; g++) {
+          float scale0 = b.scales[g * n + ni + 0];
+          float scale1 = b.scales[g * n + ni + 1];
+          int k_base = g * group_size;
+
+          for (int ki = 0; ki < group_size; ki += 8) {
+            int k_abs = k_base + ki;
+            __m256 a_val = load_bf16_to_fp32(a_row + k_abs);
+            uint32_t packed0 = b.qweight[(k_abs / 8) * n + ni + 0];
+            uint32_t packed1 = b.qweight[(k_abs / 8) * n + ni + 1];
+            acc0 = _mm256_fmadd_ps(a_val, gptq_sym_dequant_8x4bit(packed0, scale0), acc0);
+            acc1 = _mm256_fmadd_ps(a_val, gptq_sym_dequant_8x4bit(packed1, scale1), acc1);
+          }
+        }
+
+        c.data[mi * n + ni + 0] = hsum_avx2(acc0);
+        c.data[mi * n + ni + 1] = hsum_avx2(acc1);
+      }
+    }
+  }
+
+  for (; ni < n_end; ni++) {
     int mi = 0;
     for (; mi + M_TILE <= m; mi += M_TILE) {
       __m256 acc[M_TILE] = {

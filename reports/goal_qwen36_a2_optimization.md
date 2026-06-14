@@ -231,3 +231,48 @@ Important nuance:
   because the absolute env prefix embedded in the command line changes again.
 - After that first compile for the promoted env, the runtime lane should be much
   closer to a stable restart path than the previous shared-cache setup.
+
+## 2026-06-15 Isolated Prefill Kernel Finding
+
+An isolated follow-up experiment path was created under:
+
+- repo copy: `/data/nvme0/ktransformers_isolated_exp`
+- env copy: `/data/nvme0/kt_a2_qw36_isolated_exp`
+
+The retained effective code change in that lane is:
+
+- `kt-kernel/operators/avx2/gptq_int4-moe.hpp`
+- add an `N=2` output-column path for `gemm_gptq_sym_int4()`, but only when `m > 1`
+- `m == 1` decode falls back to the original single-column implementation
+
+Micro-benchmark evidence on the structured hybrid prefill workload:
+
+- workload:
+  - `964 tokens`
+  - `top-k=8`
+  - `32 active GPU experts`
+  - `64 active CPU experts`
+  - `50/50 GPU/CPU slots`
+- baseline:
+  - `Submit CPU ≈ 0.180 ms`
+  - `GPU compute ≈ 3.910 ms`
+  - `Sync CPU ≈ 210.589 ms`
+  - `Total apply() ≈ 215.233 ms`
+- retained isolated variant:
+  - `Submit CPU ≈ 0.177 ms`
+  - `GPU compute ≈ 3.919 ms`
+  - `Sync CPU ≈ 187.836 ms`
+  - `Total apply() ≈ 192.490 ms`
+
+Approximate delta:
+
+- `Total apply()`: about `+11.82%`
+
+Decode micro-benchmark on the retained isolated variant stayed at the baseline level:
+
+- `Total apply() ≈ 1.352 ms`
+
+So this follow-up finding supports:
+
+- a meaningful CPU-kernel prefill gain
+- without introducing a decode regression in the decode micro-benchmark path
