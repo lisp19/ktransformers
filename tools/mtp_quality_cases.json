@@ -1,0 +1,69 @@
+[
+  {
+    "name": "cn_short_intro",
+    "messages": [
+      {
+        "role": "user",
+        "content": "请用中文做一个简短自我介绍，控制在120字以内。"
+      }
+    ],
+    "max_tokens": 160,
+    "temperature": 0,
+    "min_chars": 20,
+    "max_chars": 220,
+    "must_not_contain": ["<think>", "</think>", "无法回答"]
+  },
+  {
+    "name": "math_exact",
+    "messages": [
+      {
+        "role": "user",
+        "content": "只回答最终结果：13乘以17等于多少？"
+      }
+    ],
+    "max_tokens": 32,
+    "temperature": 0,
+    "must_contain": ["221"]
+  },
+  {
+    "name": "fact_extract",
+    "messages": [
+      {
+        "role": "user",
+        "content": "阅读这段文字并只回答城市名称和年份：\"海州在2021年常住人口为312万，2023年地区生产总值达到4850亿元。云川在2021年常住人口为198万，2023年地区生产总值达到2210亿元。\" 问：2023年地区生产总值达到4850亿元的是哪个城市？"
+      }
+    ],
+    "max_tokens": 48,
+    "temperature": 0,
+    "must_contain": ["海州"]
+  },
+  {
+    "name": "json_schema",
+    "messages": [
+      {
+        "role": "user",
+        "content": "只输出JSON，不要输出其他内容。给出字段 name, city, hobby，其中name填\"Lin\"，city填\"Shanghai\"，hobby填一个中文短语。"
+      }
+    ],
+    "max_tokens": 96,
+    "temperature": 0,
+    "json_required_keys": ["name", "city", "hobby"],
+    "json_expected": {
+      "name": "Lin",
+      "city": "Shanghai"
+    }
+  },
+  {
+    "name": "code_short",
+    "messages": [
+      {
+        "role": "user",
+        "content": "写一个Python函数add(a, b)，返回两数之和。只输出代码。"
+      }
+    ],
+    "max_tokens": 96,
+    "temperature": 0,
+    "must_contain": ["def add", "return"],
+    "must_not_contain": ["解释", "说明"]
+  }
+]
