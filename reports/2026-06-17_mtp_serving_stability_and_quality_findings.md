@@ -75,6 +75,35 @@ Failure shape:
 
 This means requirement 2 from the active objective is not satisfied.
 
+## Control Comparison
+
+An additional control run was executed in the copied environment on the same A2, but without speculative MTP enabled.
+
+Purpose:
+
+- distinguish generic parser / copied-environment issues
+- from MTP speculative-runtime issues
+
+Control run result:
+
+- raw `/generate` on `只回答最终结果：13乘以17等于多少？`
+- produced reasoning tags, but did reach the correct final answer `221`
+- representative raw token ids:
+  - `[271, 248068, 271, 248069, 271, 17, 17, 16, 248044]`
+
+MTP run result:
+
+- the same raw `/generate` prompt produced corrupted output
+- representative raw output contained repeated `<think>` tags and incorrect visible text such as `13`
+- representative raw token ids:
+  - `[271, 248068, 198, 16, 18, 271, 248068, ...]`
+
+Conclusion:
+
+- the copied environment itself can still produce a semantically correct raw answer
+- the corruption is introduced by the MTP/speculative path
+- the chat/reasoning parser is not the primary root cause, because the raw `/generate` output is already wrong on the MTP path
+
 ## Performance Result
 
 The current KT-MTP path is also not meeting the performance goal yet.
