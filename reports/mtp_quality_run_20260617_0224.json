@@ -1,0 +1,90 @@
+{
+  "base_url": "http://127.0.0.1:30001",
+  "model": "qwen3.6-35b-a3b",
+  "all_passed": false,
+  "results": [
+    {
+      "name": "cn_short_intro",
+      "passed": false,
+      "output_text": "",
+      "reasoning_text": "Here's user\nHere's user\nHere's user\nHere's user\nHere's user\nHere's user\nHere's user\nHere's user\nHere's user\nHere's user\nHere's user\nHere's user\nHere's user\nHere's user\nHere's user\nHere's user\nHere's user\nHere's user\nHere's user\nHere's user's user's user's user's user's user's user's user's user's user's user's user's user's user's user's user's user's user's user's user's user's\nHere's user's user's user's user's user's\nHere's user's\nHere's user's user's user's user's user's user's user's user's user's user",
+      "failures": [
+        "empty_output",
+        "min_chars<20"
+      ],
+      "usage": {
+        "prompt_tokens": 23,
+        "total_tokens": 183,
+        "completion_tokens": 160,
+        "prompt_tokens_details": null,
+        "reasoning_tokens": 0
+      }
+    },
+    {
+      "name": "math_exact",
+      "passed": false,
+      "output_text": "</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>",
+      "reasoning_text": "Here's user asked:\n",
+      "failures": [
+        "missing:221"
+      ],
+      "usage": {
+        "prompt_tokens": 23,
+        "total_tokens": 55,
+        "completion_tokens": 32,
+        "prompt_tokens_details": null,
+        "reasoning_tokens": 0
+      }
+    },
+    {
+      "name": "fact_extract",
+      "passed": false,
+      "output_text": "</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>",
+      "reasoning_text": "Here's thinking\n\n",
+      "failures": [
+        "missing:海州"
+      ],
+      "usage": {
+        "prompt_tokens": 100,
+        "total_tokens": 148,
+        "completion_tokens": 48,
+        "prompt_tokens_details": null,
+        "reasoning_tokens": 0
+      }
+    },
+    {
+      "name": "json_schema",
+      "passed": false,
+      "output_text": "</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n</think>\n\n```json\n{\n</think>\n\n</think>\n\n</think>\n\n</think>",
+      "reasoning_text": "嗯，\n",
+      "failures": [
+        "json_parse:no JSON object found"
+      ],
+      "usage": {
+        "prompt_tokens": 48,
+        "total_tokens": 144,
+        "completion_tokens": 96,
+        "prompt_tokens_details": null,
+        "reasoning_tokens": 0
+      }
+    },
+    {
+      "name": "code_short",
+      "passed": false,
+      "output_text": "",
+      "reasoning_text": "Here's the user asked for the user asked for the user asked for the user asked for the user asked for the user asked for the user asked for the user asked for the user asked for the user asked for the user asked for the user asked for the user asked for the user asked for the user asked for the user asked for the user asked for the user asked for the user asked for the user asked for the user asked for the user asked for the user asked for the user",
+      "failures": [
+        "empty_output",
+        "missing:def add",
+        "missing:return"
+      ],
+      "usage": {
+        "prompt_tokens": 28,
+        "total_tokens": 124,
+        "completion_tokens": 96,
+        "prompt_tokens_details": null,
+        "reasoning_tokens": 0
+      }
+    }
+  ]
+}
